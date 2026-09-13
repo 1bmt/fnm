@@ -25,8 +25,6 @@ type Restaurant = {
 };
 
 // Recursively search an object for latitude/longitude fields.
-// Handles any nesting depth, since Mappls buries coordinates differently
-// across SDK versions and endpoints.
 function findCoords(obj: any): { lat: number; lng: number } | null {
   if (!obj || typeof obj !== "object") return null;
 
@@ -47,15 +45,11 @@ function findCoords(obj: any): { lat: number; lng: number } | null {
 export default function MapComponent() {
   const mapInstanceRef = useRef<any>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
-
-  // Stores the object returned by the pinMarker callback so we can call
-  // .remove() on it later to clear pins from the map.
   const pinMarkerRef = useRef<any>(null);
 
   const [isMapLoaded, setIsMapLoaded] = useState(false);
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
-  // null = carousel view. Set = focus mode on that restaurant.
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
 
   // ---- STEP 1: Get the user's location ----
@@ -105,7 +99,6 @@ export default function MapComponent() {
         newMap.on("load", () => {
           setIsMapLoaded(true);
 
-          // Load Nearby, pinMarker, and getPinDetails plugins together.
           const pluginScript = document.createElement("script");
           pluginScript.src = `https://sdk.mappls.com/map/sdk/plugins?access_token=${process.env.NEXT_PUBLIC_MAPPLS_TOKEN}&v=3.0&libraries=nearby,pinMarker,getPinDetails`;
           pluginScript.async = true;
@@ -114,7 +107,6 @@ export default function MapComponent() {
             (mapplsPluginObject as any).nearby(
               {
                 map: newMap,
-                // String keywords with ';' OR operator for broader coverage.
                 keywords: "FODCOF;cafe;bakery;fast food",
                 refLocation: userLocation,
                 fitbounds: true,
@@ -125,7 +117,6 @@ export default function MapComponent() {
                 const list: Restaurant[] = response?.data ?? [];
                 console.log("🍽️ Restaurant count:", list.length);
 
-                // Clear the default markers the nearby plugin auto-drops.
                 if (response?.markers && typeof response.markers.clear === "function") {
                   response.markers.clear();
                 } else if (
@@ -135,7 +126,6 @@ export default function MapComponent() {
                   response.markers._rmv();
                 }
 
-                // Draw our custom dish pins for all restaurants.
                 const withELoc = list.filter((r) => r.eLoc);
                 if (withELoc.length > 0) {
                   (mapplsPluginObject as any).pinMarker(
@@ -155,7 +145,6 @@ export default function MapComponent() {
                     },
                     (data: any) => {
                       console.log("📍 pinMarker result:", data);
-                      // Store so we can call .remove() on it later.
                       pinMarkerRef.current = data;
                     }
                   );
@@ -185,14 +174,11 @@ export default function MapComponent() {
     };
   }, [userLocation]);
 
-  // ---- Handler: enter focus mode on a restaurant ----
-  // Removes all existing pins via pinMarkerRef.current.remove(),
-  // then drops one larger pin at the selected restaurant.
+  // ---- Handler: enter focus mode ----
   const handleCardClick = async (r: Restaurant) => {
     if (!mapInstanceRef.current) return;
     const newMap = mapInstanceRef.current;
 
-    // Resolve coordinates. Fast path if already cached.
     let coords: { lat: number; lng: number } | null = null;
 
     if (typeof r.latitude === "number" && typeof r.longitude === "number") {
@@ -202,7 +188,6 @@ export default function MapComponent() {
         (mapplsPluginObject as any).getPinDetails(
           { pin: r.eLoc, map: newMap },
           (details: any) => {
-            // Remove the default brown pin that getPinDetails drops.
             if (details && typeof details.remove === "function") {
               details.remove();
             } else if (details?.marker && typeof details.marker.remove === "function") {
@@ -230,14 +215,11 @@ export default function MapComponent() {
       return;
     }
 
-    // Remove every existing pin. The pinMarker callback returns an object
-    // with a .remove() method that clears all markers it created.
     if (pinMarkerRef.current && typeof pinMarkerRef.current.remove === "function") {
       pinMarkerRef.current.remove();
       pinMarkerRef.current = null;
     }
 
-    // Draw just the selected restaurant's pin, larger for emphasis.
     if (r.eLoc) {
       (mapplsPluginObject as any).pinMarker(
         {
@@ -260,7 +242,6 @@ export default function MapComponent() {
       );
     }
 
-    // Pan and zoom in on the selected restaurant.
     newMap.panTo(coords);
     newMap.setZoom(17);
 
@@ -268,23 +249,19 @@ export default function MapComponent() {
   };
 
   // ---- Handler: exit focus mode ----
-  // Removes the single focus pin, then redraws all restaurant pins.
   const handleBack = () => {
     setSelectedRestaurant(null);
 
     const newMap = mapInstanceRef.current;
     if (!newMap) return;
 
-    // Restore the default zoom level.
     newMap.setZoom(14);
 
-    // Remove the single focus pin.
     if (pinMarkerRef.current && typeof pinMarkerRef.current.remove === "function") {
       pinMarkerRef.current.remove();
       pinMarkerRef.current = null;
     }
 
-    // Redraw all restaurant pins.
     const withELoc = restaurants.filter((r) => r.eLoc);
     if (withELoc.length > 0) {
       (mapplsPluginObject as any).pinMarker(
@@ -311,43 +288,86 @@ export default function MapComponent() {
   };
 
   return (
-    <div className="relative w-full h-screen">
+    <div className="relative w-full h-screen bg-gray-50">
       {/* Map fills the screen */}
       <div id="map" ref={mapContainerRef} className="w-full h-full">
         {!isMapLoaded && (
-          <div className="flex items-center justify-center h-full">
+          <div className="flex items-center justify-center h-full bg-gray-50">
             <p className="text-gray-500">Loading map...</p>
           </div>
         )}
       </div>
 
-      {/* Bottom UI: focus-mode card OR carousel, depending on selection */}
+      {/* Bottom UI: focus-mode card OR carousel */}
       {selectedRestaurant ? (
-        <div className="absolute bottom-4 left-4 right-4 z-10 bg-white rounded-2xl shadow-lg p-4">
-          <button
-            onClick={handleBack}
-            className="text-sm text-gray-500 mb-2 flex items-center gap-1 hover:text-gray-800"
+        /* -------- FOCUS MODE -------- */
+        <div className="absolute bottom-0 left-0 right-0 z-10 pb-[env(safe-area-inset-bottom)]">
+          <div
+            className="
+              mx-auto max-w-md
+              bg-white border border-gray-200 shadow-lg
+              rounded-t-2xl sm:rounded-2xl sm:mb-4
+              p-5
+            "
           >
-            ← Back to all places
-          </button>
-          <h3 className="text-lg font-semibold text-gray-900">
-            {selectedRestaurant.placeName ?? "Unnamed place"}
-          </h3>
-          <p className="text-sm text-gray-500 mt-1">
-            {selectedRestaurant.placeAddress ?? "No address"}
-          </p>
-          {typeof selectedRestaurant.distance === "number" && (
-            <p className="text-xs text-gray-400 mt-2">
-              {selectedRestaurant.distance < 1000
-                ? `${Math.round(selectedRestaurant.distance)} m away`
-                : `${(selectedRestaurant.distance / 1000).toFixed(1)} km away`}
+            {/* Styled back button with icon */}
+            <button
+              onClick={handleBack}
+              className="
+                inline-flex items-center gap-1.5
+                text-sm font-medium text-gray-600
+                bg-gray-100 hover:bg-gray-200
+                px-3 py-1.5 rounded-full
+                transition-colors
+                active:scale-95
+              "
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M19 12H5" />
+                <path d="M12 19l-7-7 7-7" />
+              </svg>
+              Back
+            </button>
+
+            <h3 className="text-xl font-semibold text-gray-900 mt-3">
+              {selectedRestaurant.placeName ?? "Unnamed place"}
+            </h3>
+
+            <p className="text-sm text-gray-500 mt-2 leading-snug">
+              {selectedRestaurant.placeAddress ?? "No address"}
             </p>
-          )}
+
+            {typeof selectedRestaurant.distance === "number" && (
+              <span className="inline-block text-xs font-medium text-orange-600 bg-orange-50 px-2.5 py-1 rounded-full mt-3">
+                {selectedRestaurant.distance < 1000
+                  ? `${Math.round(selectedRestaurant.distance)} m away`
+                  : `${(selectedRestaurant.distance / 1000).toFixed(1)} km away`}
+              </span>
+            )}
+          </div>
         </div>
       ) : (
+        /* -------- CAROUSEL MODE -------- */
         restaurants.length > 0 && (
-          <div className="absolute bottom-4 left-0 right-0 z-10">
-            <div className="flex gap-3 overflow-x-auto px-4 pb-2 snap-x snap-mandatory scrollbar-hide">
+          <div className="absolute bottom-0 left-0 right-0 z-10 pb-[env(safe-area-inset-bottom)]">
+            {/* Small label above the carousel */}
+            <div className="px-4 pb-2">
+              <span className="text-xs font-medium text-gray-600 bg-white/80 backdrop-blur-sm px-2.5 py-1 rounded-full">
+                {restaurants.length} places nearby
+              </span>
+            </div>
+
+            <div className="flex gap-3 overflow-x-auto px-4 pb-4 snap-x snap-mandatory scrollbar-hide">
               {restaurants.map((r, i) => (
                 <div key={r.eLoc ?? i} className="snap-start">
                   <RestaurantCard
