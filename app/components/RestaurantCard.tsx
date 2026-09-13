@@ -6,7 +6,7 @@ type Restaurant = {
   placeAddress?: string;
   distance?: number;
   eLoc?: string;
-  [key: string]: any;
+  [key: string]: unknown;
 };
 
 function formatDistance(meters?: number): string {
