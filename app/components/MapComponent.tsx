@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { mappls, mappls_plugin } from "mappls-web-maps";
+import RestaurantCard from "./RestaurantCard";
 
 // We create the Mappls class instance OUTSIDE the component.
 // Why? If it were inside, a new instance would be created on every render,
@@ -12,10 +13,8 @@ import { mappls, mappls_plugin } from "mappls-web-maps";
 const mapplsClassObject = new mappls();
 
 // Separate instance for plugin methods like `.nearby()`.
-// The `mappls` class only handles core map stuff. Plugins live on this object.
 const mapplsPluginObject = new mappls_plugin();
 
-// Shape of a single restaurant returned by Mappls nearby search.
 type Restaurant = {
   placeName?: string;
   placeAddress?: string;
@@ -23,32 +22,15 @@ type Restaurant = {
   latitude?: number;
   longitude?: number;
   eLoc?: string;
-  keywords?: string[];
   [key: string]: any;
 };
 
-// Format a distance in meters into a friendlier string.
-// Under 1 km → "350 m". Over 1 km → "1.2 km".
-function formatDistance(meters?: number): string {
-  if (typeof meters !== "number") return "";
-  if (meters < 1000) return `${Math.round(meters)} m`;
-  return `${(meters / 1000).toFixed(1)} km`;
-}
-
 export default function MapComponent() {
-  // useRef stores the map INSTANCE across renders without causing re-renders.
   const mapInstanceRef = useRef<any>(null);
-
-  // useRef for the actual DOM element that Mappls will render into.
   const mapContainerRef = useRef<HTMLDivElement>(null);
 
-  // useState to show/hide the "Loading..." text.
   const [isMapLoaded, setIsMapLoaded] = useState(false);
-
-  // useState for the user's coordinates.
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
-
-  // useState for the restaurant list returned by the nearby search.
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
 
   // ---- STEP 1: Get the user's location ----
@@ -98,13 +80,12 @@ export default function MapComponent() {
         newMap.on("load", () => {
           setIsMapLoaded(true);
 
-          // ---- STEP 3: Load the Nearby plugin script ----
+          // Load the Nearby plugin script
           const pluginScript = document.createElement("script");
           pluginScript.src = `https://sdk.mappls.com/map/sdk/plugins?access_token=${process.env.NEXT_PUBLIC_MAPPLS_TOKEN}&v=3.0&libraries=nearby`;
           pluginScript.async = true;
 
           pluginScript.onload = () => {
-            // ---- STEP 4: Search for nearby restaurants ----
             (mapplsPluginObject as any).nearby(
               {
                 map: newMap,
@@ -115,8 +96,6 @@ export default function MapComponent() {
                 popup: true,
               },
               (response: any) => {
-                // The response is an object, not an array.
-                // The restaurant list lives at response.data.
                 const list: Restaurant[] = response?.data ?? [];
                 console.log("🍽️ Restaurant count:", list.length);
                 console.log("First restaurant:", list[0]);
@@ -146,7 +125,7 @@ export default function MapComponent() {
 
   return (
     <div className="relative w-full h-screen">
-      {/* Map container */}
+      {/* Map fills the screen */}
       <div id="map" ref={mapContainerRef} className="w-full h-full">
         {!isMapLoaded && (
           <div className="flex items-center justify-center h-full">
@@ -155,46 +134,22 @@ export default function MapComponent() {
         )}
       </div>
 
-      {/* Card panel — bottom sheet style */}
+      {/* Horizontal scrolling card carousel */}
       {restaurants.length > 0 && (
-        <div className="absolute bottom-0 left-0 right-0 max-h-[45%] overflow-y-auto bg-white rounded-t-2xl shadow-[0_-4px_12px_rgba(0,0,0,0.1)] z-10">
-          {/* Drag handle visual */}
-          <div className="flex justify-center pt-2 pb-1">
-            <div className="w-10 h-1 bg-gray-300 rounded-full" />
-          </div>
-
-          {/* Header */}
-          <div className="px-4 py-2 border-b border-gray-100">
-            <h3 className="text-base font-semibold text-gray-800">
-              {restaurants.length} places nearby
-            </h3>
-          </div>
-
-          {/* Card list */}
-          <ul className="divide-y divide-gray-100">
+        <div className="absolute bottom-4 left-0 right-0 z-10">
+          <div className="flex gap-3 overflow-x-auto px-4 pb-2 snap-x snap-mandatory scrollbar-hide">
             {restaurants.map((r, i) => (
-              <li
-                key={r.eLoc ?? i}
-                className="px-4 py-3 active:bg-gray-50 cursor-pointer"
-              >
-                <div className="flex justify-between items-start gap-3">
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-medium text-gray-900 truncate">
-                      {r.placeName ?? "Unnamed place"}
-                    </h4>
-                    <p className="text-sm text-gray-500 line-clamp-2 mt-0.5">
-                      {r.placeAddress ?? "No address"}
-                    </p>
-                  </div>
-                  {r.distance !== undefined && (
-                    <span className="text-xs text-gray-400 whitespace-nowrap pt-0.5">
-                      {formatDistance(r.distance)}
-                    </span>
-                  )}
-                </div>
-              </li>
+              <div key={r.eLoc ?? i} className="snap-start">
+                <RestaurantCard
+                  restaurant={r}
+                  onClick={() => {
+                    console.log("Tapped:", r.placeName, r.eLoc);
+                    // Later: pan the map to this restaurant's coordinates.
+                  }}
+                />
+              </div>
             ))}
-          </ul>
+          </div>
         </div>
       )}
     </div>
