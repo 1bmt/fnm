@@ -12,7 +12,7 @@ import RestaurantCard from "./RestaurantCard";
 // which is wasteful and can cause the SDK to re-initialize unexpectedly.
 const mapplsClassObject = new mappls();
 
-// Separate instance for plugin methods like `.nearby()`.
+// Separate instance for plugin methods like `.nearby()` and `.pinMarker()`.
 const mapplsPluginObject = new mappls_plugin();
 
 type Restaurant = {
@@ -80,9 +80,11 @@ export default function MapComponent() {
         newMap.on("load", () => {
           setIsMapLoaded(true);
 
-          // Load the Nearby plugin script
+          // Load both Nearby and pinMarker plugins.
+          // pinMarker is designed specifically to render markers from eLoc values
+          // and resolves coordinates internally — no need to fetch them ourselves.
           const pluginScript = document.createElement("script");
-          pluginScript.src = `https://sdk.mappls.com/map/sdk/plugins?access_token=${process.env.NEXT_PUBLIC_MAPPLS_TOKEN}&v=3.0&libraries=nearby`;
+          pluginScript.src = `https://sdk.mappls.com/map/sdk/plugins?access_token=${process.env.NEXT_PUBLIC_MAPPLS_TOKEN}&v=3.0&libraries=nearby,pinMarker`;
           pluginScript.async = true;
 
           pluginScript.onload = () => {
@@ -98,14 +100,56 @@ export default function MapComponent() {
               (response: any) => {
                 const list: Restaurant[] = response?.data ?? [];
                 console.log("🍽️ Restaurant count:", list.length);
-                console.log("First restaurant:", list[0]);
+
+                // Clear the default markers the nearby plugin auto-drops,
+                // since we're about to draw our own with the dish icon.
+                if (response?.markers && typeof response.markers.clear === "function") {
+                  response.markers.clear();
+                } else if (
+                  response?.markers &&
+                  typeof response.markers._rmv === "function"
+                ) {
+                  response.markers._rmv();
+                }
+
+                // Filter out any restaurants missing an eLoc.
+                const withELoc = list.filter((r) => r.eLoc);
+                if (withELoc.length === 0) {
+                  console.warn("No restaurants had an eLoc to place markers for.");
+                  setRestaurants(list);
+                  return;
+                }
+
+                // pinMarker takes arrays for pin, popupHtml, and icon.
+                // It resolves coordinates from the eLoc internally, which
+                // avoids the getPinDetails nesting problem entirely.
+                (mapplsPluginObject as any).pinMarker(
+                  {
+                    map: newMap,
+                    pin: withELoc.map((r) => r.eLoc as string),
+                    popupHtml: withELoc.map(
+                      (r) =>
+                        `<div style="font-weight:600">${r.placeName ?? "Restaurant"}</div>`
+                    ),
+                    icon: {
+                      url: "/dish.png",
+                      width: 36,
+                      height: 36,
+                      offset: [18, 36],
+                    },
+                  },
+                  (data: any) => {
+                    console.log("📍 pinMarker result:", data);
+                  }
+                );
+
                 setRestaurants(list);
               }
             );
           };
 
           pluginScript.onerror = () => {
-            console.error("Failed to load the Mappls Nearby plugin.");
+            console.error("Failed to load the Mappls plugins.");
           };
 
           document.head.appendChild(pluginScript);
@@ -144,7 +188,6 @@ export default function MapComponent() {
                   restaurant={r}
                   onClick={() => {
                     console.log("Tapped:", r.placeName, r.eLoc);
-                    // Later: pan the map to this restaurant's coordinates.
                   }}
                 />
               </div>
