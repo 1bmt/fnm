@@ -12,7 +12,8 @@ import RestaurantCard from "./RestaurantCard";
 // which is wasteful and can cause the SDK to re-initialize unexpectedly.
 const mapplsClassObject = new mappls();
 
-// Separate instance for plugin methods like `.nearby()` and `.pinMarker()`.
+// Separate instance for plugin methods like `.nearby()`, `.pinMarker()`,
+// and `.getPinDetails()`.
 const mapplsPluginObject = new mappls_plugin();
 
 type Restaurant = {
@@ -24,6 +25,28 @@ type Restaurant = {
   eLoc?: string;
   [key: string]: any;
 };
+
+// Recursively search an object for latitude/longitude fields.
+// Handles any nesting depth, since Mappls buries coordinates differently
+// across SDK versions and endpoints.
+function findCoords(obj: any): { lat: number; lng: number } | null {
+  if (!obj || typeof obj !== "object") return null;
+
+  // Check this level for coordinate fields.
+  const lat = obj.latitude ?? obj.lat;
+  const lng = obj.longitude ?? obj.lng ?? obj.lon;
+  if (typeof lat === "number" && typeof lng === "number") {
+    return { lat, lng };
+  }
+
+  // Recurse into any child objects (arrays or plain objects).
+  for (const key of Object.keys(obj)) {
+    const found = findCoords(obj[key]);
+    if (found) return found;
+  }
+
+  return null;
+}
 
 export default function MapComponent() {
   const mapInstanceRef = useRef<any>(null);
@@ -80,18 +103,18 @@ export default function MapComponent() {
         newMap.on("load", () => {
           setIsMapLoaded(true);
 
-          // Load both Nearby and pinMarker plugins.
-          // pinMarker is designed specifically to render markers from eLoc values
-          // and resolves coordinates internally — no need to fetch them ourselves.
+          // Load Nearby, pinMarker, and getPinDetails plugins together.
+          // getPinDetails is needed for on-tap coordinate lookup.
           const pluginScript = document.createElement("script");
-          pluginScript.src = `https://sdk.mappls.com/map/sdk/plugins?access_token=${process.env.NEXT_PUBLIC_MAPPLS_TOKEN}&v=3.0&libraries=nearby,pinMarker`;
+          pluginScript.src = `https://sdk.mappls.com/map/sdk/plugins?access_token=${process.env.NEXT_PUBLIC_MAPPLS_TOKEN}&v=3.0&libraries=nearby,pinMarker,getPinDetails`;
           pluginScript.async = true;
 
           pluginScript.onload = () => {
             (mapplsPluginObject as any).nearby(
               {
                 map: newMap,
-                keywords: "restaurant",
+                // String keywords with ';' OR operator for broader coverage.
+                keywords: "FODCOF;cafe;bakery;fast food",
                 refLocation: userLocation,
                 fitbounds: true,
                 geolocation: false,
@@ -120,9 +143,7 @@ export default function MapComponent() {
                   return;
                 }
 
-                // pinMarker takes arrays for pin, popupHtml, and icon.
-                // It resolves coordinates from the eLoc internally, which
-                // avoids the getPinDetails nesting problem entirely.
+                // pinMarker places our custom dish icons on the map.
                 (mapplsPluginObject as any).pinMarker(
                   {
                     map: newMap,
@@ -167,6 +188,57 @@ export default function MapComponent() {
     };
   }, [userLocation]);
 
+  // ---- Handler: pan the map when a card is tapped ----
+  // Fast path: pan immediately if coordinates are already known.
+  // Slow path: fetch details by eLoc via getPinDetails, then pan.
+  const handleCardClick = async (r: Restaurant) => {
+    console.log("Tapped:", r.placeName);
+
+    if (!mapInstanceRef.current) {
+      console.warn("Map instance not ready");
+      return;
+    }
+
+    // Fast path: coordinates already known.
+    if (typeof r.latitude === "number" && typeof r.longitude === "number") {
+      mapInstanceRef.current.panTo({ lat: r.latitude, lng: r.longitude });
+      return;
+    }
+
+    // Slow path: no coordinates yet, fetch them.
+    if (!r.eLoc) {
+      console.warn("No eLoc to fetch coordinates for", r.placeName);
+      return;
+    }
+
+    (mapplsPluginObject as any).getPinDetails(
+      { pin: r.eLoc, map: mapInstanceRef.current },
+      (details: any) => {
+        console.log("🔍 Details for", r.placeName, details);
+
+        const coords = findCoords(details);
+        if (!coords) {
+          console.warn("⚠️ No coordinates found in details for", r.placeName);
+          return;
+        }
+
+        console.log("📍 Panning to", r.placeName, coords.lat, coords.lng);
+
+        // Cache coordinates on the restaurant so next tap uses the fast path.
+        setRestaurants((prev) =>
+          prev.map((item) =>
+            item.eLoc === r.eLoc
+              ? { ...item, latitude: coords.lat, longitude: coords.lng }
+              : item
+          )
+        );
+
+        // Smoothly pan the map to the restaurant.
+        mapInstanceRef.current.panTo(coords);
+      }
+    );
+  };
+
   return (
     <div className="relative w-full h-screen">
       {/* Map fills the screen */}
@@ -186,9 +258,7 @@ export default function MapComponent() {
               <div key={r.eLoc ?? i} className="snap-start">
                 <RestaurantCard
                   restaurant={r}
-                  onClick={() => {
-                    console.log("Tapped:", r.placeName, r.eLoc);
-                  }}
+                  onClick={() => handleCardClick(r)}
                 />
               </div>
             ))}
