@@ -9,11 +9,6 @@ const mapplsPluginObject = new mappls_plugin();
 
 type Coordinates = [number, number];
 
-type Location = {
-  lat: number;
-  lng: number;
-};
-
 type Restaurant = {
   placeName?: string;
   placeAddress?: string;
@@ -33,6 +28,7 @@ type MapplsMap = {
 
 type MarkerSet = {
   remove: () => void;
+  fitbounds?: (options?: { padding?: number }) => void;
 };
 
 type MarkerIcon = {
@@ -43,10 +39,6 @@ type MarkerIcon = {
 };
 
 type MapplsPluginClient = {
-  getPinDetails: (
-    options: { pin: string },
-    callback: (details: unknown) => void
-  ) => unknown;
   nearby: (
     options: {
       map: MapplsMap;
@@ -111,33 +103,6 @@ function getRestaurants(value: unknown): Restaurant[] {
   return value.data.filter(isRestaurant);
 }
 
-function findCoords(
-  value: unknown,
-  visited = new WeakSet<object>()
-): Location | null {
-  if (!isRecord(value) || visited.has(value)) return null;
-  visited.add(value);
-
-  const latitude = typeof value.latitude === "number" ? value.latitude : value.lat;
-  const longitude =
-    typeof value.longitude === "number"
-      ? value.longitude
-      : typeof value.lng === "number"
-        ? value.lng
-        : value.lon;
-
-  if (typeof latitude === "number" && typeof longitude === "number") {
-    return { lat: latitude, lng: longitude };
-  }
-
-  for (const nestedValue of Object.values(value)) {
-    const coordinates = findCoords(nestedValue, visited);
-    if (coordinates) return coordinates;
-  }
-
-  return null;
-}
-
 function escapeHtml(value: string): string {
   const entities: Record<string, string> = {
     "&": "&amp;",
@@ -171,7 +136,11 @@ export default function MapComponent() {
     pinMarkersRef.current = null;
   };
 
-  const renderPinMarkers = (places: Restaurant[], icon: MarkerIcon) => {
+  const renderPinMarkers = (
+    places: Restaurant[],
+    icon: MarkerIcon,
+    onMarkersReady?: (markerSet: MarkerSet) => void
+  ) => {
     const map = mapInstanceRef.current;
     const pins = places.flatMap((place) => (place.eLoc ? [place.eLoc] : []));
     if (!map || pins.length === 0) return;
@@ -185,15 +154,20 @@ export default function MapComponent() {
           )}</div>`
       );
 
+    const saveMarkerSet = (markerSet: MarkerSet) => {
+      pinMarkersRef.current = markerSet;
+      onMarkersReady?.(markerSet);
+    };
+
     const result = mapplsPlugin.pinMarker(
       { map, pin: pins, popupHtml, icon },
       (response) => {
         const markerSet = getMarkerSet(response);
-        if (markerSet) pinMarkersRef.current = markerSet;
+        if (markerSet) saveMarkerSet(markerSet);
       }
     );
     const markerSet = getMarkerSet(result);
-    if (markerSet) pinMarkersRef.current = markerSet;
+    if (markerSet) saveMarkerSet(markerSet);
   };
 
   // Ask for location once. The fallback keeps the app usable when permission is
@@ -233,7 +207,7 @@ export default function MapComponent() {
       map: true,
       version: "3.0",
       libraries: [],
-      plugins: ["nearby", "pinMarker", "getPinDetails"],
+      plugins: ["nearby", "pinMarker"],
     };
 
     mapplsClassObject.initialize(accessToken, loadObject, () => {
@@ -286,56 +260,32 @@ export default function MapComponent() {
     };
   }, [accessToken, userLocation]);
 
-  const getRestaurantCoordinates = (restaurant: Restaurant) => {
-    if (
-      typeof restaurant.latitude === "number" &&
-      typeof restaurant.longitude === "number"
-    ) {
-      return Promise.resolve<Location>({
-        lat: restaurant.latitude,
-        lng: restaurant.longitude,
-      });
-    }
-
-    if (!restaurant.eLoc) return Promise.resolve<Location | null>(null);
-
-    return new Promise<Location | null>((resolve) => {
-      mapplsPlugin.getPinDetails({ pin: restaurant.eLoc as string }, (details) => {
-        const coordinates = findCoords(details);
-
-        if (coordinates) {
-          setRestaurants((currentRestaurants) =>
-            currentRestaurants.map((currentRestaurant) =>
-              currentRestaurant.eLoc === restaurant.eLoc
-                ? {
-                    ...currentRestaurant,
-                    latitude: coordinates.lat,
-                    longitude: coordinates.lng,
-                  }
-                : currentRestaurant
-            )
-          );
-        }
-
-        resolve(coordinates);
-      });
-    });
-  };
-
-  const handleCardClick = async (restaurant: Restaurant) => {
+  const handleCardClick = (restaurant: Restaurant) => {
     const map = mapInstanceRef.current;
     if (!map) return;
 
-    const coordinates = await getRestaurantCoordinates(restaurant);
-    if (!coordinates) {
-      console.warn("No coordinates found for", restaurant.placeName);
+    removeRestaurantMarkers();
+
+    if (restaurant.eLoc) {
+      renderPinMarkers(
+        [restaurant],
+        FOCUSED_RESTAURANT_MARKER_ICON,
+        (markerSet) => {
+          markerSet.fitbounds?.({ padding: 80 });
+          map.setZoom(17);
+        }
+      );
+    } else if (
+      typeof restaurant.latitude === "number" &&
+      typeof restaurant.longitude === "number"
+    ) {
+      map.panTo([restaurant.latitude, restaurant.longitude]);
+      map.setZoom(17);
+    } else {
+      console.warn("No eLoc or coordinates found for", restaurant.placeName);
       return;
     }
 
-    removeRestaurantMarkers();
-    renderPinMarkers([restaurant], FOCUSED_RESTAURANT_MARKER_ICON);
-    map.panTo([coordinates.lat, coordinates.lng]);
-    map.setZoom(17);
     setSelectedRestaurant(restaurant);
   };
 
