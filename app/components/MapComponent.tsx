@@ -154,9 +154,13 @@ export default function MapComponent() {
           )}</div>`
       );
 
+    let hasNotifiedMarkerReady = false;
     const saveMarkerSet = (markerSet: MarkerSet) => {
       pinMarkersRef.current = markerSet;
-      onMarkersReady?.(markerSet);
+      if (!hasNotifiedMarkerReady) {
+        hasNotifiedMarkerReady = true;
+        onMarkersReady?.(markerSet);
+      }
     };
 
     const result = mapplsPlugin.pinMarker(
